@@ -1,2 +1,2 @@
 # VeriGen - A Verilog Fuzzer with a focus on the Generate and Hierarchical Naming constructs.
-*Watch this space*
+*Watch this space - to be updated soon.*
