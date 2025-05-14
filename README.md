@@ -7,3 +7,4 @@
 TBD:
 - More complex Generate construct usage (e.g., nested constructs)
 - Support for other software tools (Icarus, possibly Vivado)
+- Stop Verilog files being generated outside the `build/` directory
