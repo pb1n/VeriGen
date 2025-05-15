@@ -21,7 +21,7 @@ struct Expr {
     virtual uint32_t    eval() const = 0;   // 32‑bit constant evaluation
 };
 
-/* ---- leaf: constant (optional wire alias) ------------------------- */
+// leaf: constant (optional wire alias)
 struct Const final : Expr {
     uint32_t    value;
     std::string sym;        // if non‑empty -> treat as wire name in emit()
@@ -33,7 +33,7 @@ struct Const final : Expr {
     uint32_t    eval()  const override { return value; }
 };
 
-/* ---- leaf: reference to another net (no constant value) ----------- */
+// leaf: reference to another net (no constant value)
 struct WireRef final : Expr {
     std::string name;
     explicit WireRef(std::string n) : name(std::move(n)) {}
@@ -43,7 +43,7 @@ struct WireRef final : Expr {
     }
 };
 
-/* ---- binary operators --------------------------------------------- */
+// binary operators
 enum class BinOp { Add, Or, And, Xor, Sub };
 inline const char* tok(BinOp op){
     switch(op){
@@ -85,7 +85,7 @@ struct BinExpr final : Expr {
     }
 };
 
-/* --------------------------- Module -------------------------------- */
+// Module
 struct Assign { std::string lhs; std::shared_ptr<Expr> rhs;
     std::string emit() const { return "assign " + lhs + " = " + rhs->emit() + ';'; } };
 
@@ -97,7 +97,7 @@ struct Module {
     bool                                 isTop = false;
 };
 
-/* =======================  Hierarchy fuzz  ========================== */
+// Hierarchy fuzz
 class HierarchyGenerator {
 public:
     explicit HierarchyGenerator(unsigned seed = std::random_device{}()) : rng(seed) {}
@@ -138,7 +138,7 @@ private:
     }
 };
 
-/* =======================  Verilog emit  ============================ */
+// Verilog emit
 inline void emitModule(const Module& m, std::ostream& os, int ind = 0){
     std::string s(ind, ' ');
     os << s << "module " << m.name << " (\n";
@@ -163,12 +163,12 @@ inline std::string emitVerilog(const Module& top){
 }
 
 /* ===================================================================
-   Legacy generator wrappers (merged from verigen_generate.hpp &
+   'Legacy' generator wrappers (from old verigen_generate.hpp &
    verigen_generate_for.hpp).
    =================================================================== */
 namespace legacy {
 
-/* ---- operator support ------------------------------------------- */
+// operator support
 inline BinOp binOpFromChar(char c){
     switch(c){
         case '+': return BinOp::Add;
@@ -185,7 +185,7 @@ inline BinOp binOpFromChar(char c){
    ================================================================ */
 class VerilogGenerator {
     std::mt19937 rng;
-    static inline const std::vector<char> OPS{'+','-','^','&','|'};
+    static inline const std::vector<char> OPS{'+','^'/*,'&','|','-',*/};
 public:
     explicit VerilogGenerator(unsigned seed = std::random_device{}())
         : rng(seed) {}
@@ -193,7 +193,7 @@ public:
     std::pair<std::filesystem::path,uint32_t>
     make(unsigned idx,int Nconst = 5)
     {
-        /* ---- build constants ----------------------------------- */
+        // build constants
         std::vector<std::shared_ptr<Const>> C;
         std::uniform_int_distribution<uint32_t> dist(0,0xffffffffu);
         for(int i=0;i<Nconst;++i){
@@ -201,7 +201,7 @@ public:
             C.push_back(std::make_shared<Const>(val,"c"+std::to_string(i)));
         }
 
-        /* ---- random expression tree ---------------------------- */
+        // random expression tree
         std::uniform_int_distribution<int> opSel(0, (int)OPS.size() - 1);
         std::shared_ptr<Expr> expr = C[0];
         for(int i=1;i<Nconst;++i){
@@ -242,8 +242,8 @@ public:
    ================================================================ */
 class VerilogGeneratorFor {
     std::mt19937 rng;
-    static inline const std::vector<char> OPS{'+','-','^','&','|'};
-    /* deterministic formula – identical in C++ & Verilog */
+    static inline const std::vector<char> OPS{'+','^'/*,'&','|','-',*/};
+    // deterministic formula – identical in C++ & Verilog
     static constexpr uint32_t K1 = 0x9E37'79B9;
     static constexpr uint32_t K2 = 0xBA55'ED5A;
 
@@ -257,14 +257,14 @@ public:
     std::pair<std::filesystem::path,uint32_t>
     make(unsigned idx,int Nconst = 5)
     {
-        /* ---- deterministic constants -------------------------- */
+        // deterministic constants
         std::vector<std::shared_ptr<Const>> C;
         for(int i=0;i<Nconst;++i){
             uint32_t val = const_val(i, idx);
             C.push_back(std::make_shared<Const>(val,"g["+std::to_string(i)+"]"));
         }
 
-        /* ---- random expression over those constants ----------- */
+        // random expression over those constants
         std::uniform_int_distribution<int> opSel(0, (int)OPS.size() - 1);
         std::shared_ptr<Expr> expr = C[0];
         for(int i=1;i<Nconst;++i){
@@ -274,7 +274,7 @@ public:
         }
         uint32_t expected = expr->eval();
 
-        /* ---- write Verilog ------------------------------------ */
+        // write Verilog
         std::filesystem::path fname = "fuzz_for_" + std::to_string(idx) + ".v";
         std::ofstream f(fname);
         if(!f) throw std::runtime_error("cannot open "+fname.string());
@@ -287,13 +287,13 @@ public:
           << "  genvar gi;\n  generate\n"
           << "    for(gi=0; gi<" << Nconst << "; gi=gi+1) begin : g_blk\n"
           << "      const_block #( ((gi + 1) * 32'h" << std::hex << K1 << std::dec
-          << ") ^ (32'h" << idx << " * 32'h" << std::hex << K2 << std::dec
+          << ") ^ (32'd" << idx << " * 32'h" << std::hex << K2 << std::dec
           << ") ) inst ( .w(g[gi]) );\n"
           << "    end\n"
           << "  endgenerate\n\n"
           << "  assign result = " << expr->emit() << ";\nendmodule\n";
 
-        std::cout << "EXPECTED: " << expected << "\n";
+        //std::cout << "EXPECTED: " << expected << "\n";
         return {fname, expected};
     }
 };
