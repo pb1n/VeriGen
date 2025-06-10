@@ -1,4 +1,10 @@
 #pragma once
+/*───────────────────────────────────────────────────────────────*
+ *  Compact hierarchical-test-source generator for Verilog       *
+ *  – outer generate/endgenerate wrapper                         *
+ *  – ADD / XOR only                                             *
+ *───────────────────────────────────────────────────────────────*/
+
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -10,294 +16,437 @@
 #include <utility>
 #include <iomanip>
 #include <stdexcept>
+#include <functional>
 
-namespace veri {
+namespace veri
+{
 
-/* ==========================  Core AST  ============================== */
+    /*───────────────────────────────────────────────────────────────*/
+    /* 1.  Expression-level AST                                      */
+    /*───────────────────────────────────────────────────────────────*/
+    struct Expr
+    {
+        virtual ~Expr() = default;
+        virtual std::string emit() const = 0;
+        virtual uint32_t eval() const = 0;
+    };
 
-struct Expr {
-    virtual ~Expr() = default;
-    virtual std::string emit() const = 0;   // Verilog string
-    virtual uint32_t    eval() const = 0;   // 32‑bit constant evaluation
-};
+    /* constant literal or aliased symbol */
+    struct Const final : Expr
+    {
+        uint32_t value;
+        std::string sym;
+        Const(uint32_t v, std::string s = {}) : value(v), sym(std::move(s)) {}
+        std::string emit() const override { return sym.empty() ? "32'd" + std::to_string(value) : sym; }
+        uint32_t eval() const override { return value; }
+    };
 
-// leaf: constant (optional wire alias)
-struct Const final : Expr {
-    uint32_t    value;
-    std::string sym;        // if non‑empty -> treat as wire name in emit()
+    /* reference to an existing net */
+    struct WireRef final : Expr
+    {
+        std::string name;
+        explicit WireRef(std::string n) : name(std::move(n)) {}
+        std::string emit() const override { return name; }
+        uint32_t eval() const override { throw std::logic_error("WireRef not const-foldable"); }
+    };
 
-    Const(uint32_t v, std::string s = {}) : value(v), sym(std::move(s)) {}
-    std::string emit()  const override {
-        return sym.empty() ? ("32'd"+std::to_string(value)) : sym;
-    }
-    uint32_t    eval()  const override { return value; }
-};
+    /* binary expression ─ (op restricted later) */
+    enum class BinOp
+    {
+        Add,
+        Sub,
+        And,
+        Or,
+        Xor
+    };
 
-// leaf: reference to another net (no constant value)
-struct WireRef final : Expr {
-    std::string name;
-    explicit WireRef(std::string n) : name(std::move(n)) {}
-    std::string emit() const override { return name; }
-    uint32_t    eval() const override {
-        throw std::logic_error("WireRef::eval() not constant‑foldable");
-    }
-};
-
-// binary operators
-enum class BinOp { Add, Or, And, Xor, Sub };
-inline const char* tok(BinOp op){
-    switch(op){
-        case BinOp::Add: return "+"; case BinOp::Sub: return "-";
-        case BinOp::Or : return "|"; case BinOp::And: return "&";
-        case BinOp::Xor: return "^";
-    }
-    return "?";
-}
-
-struct BinExpr final : Expr {
-    BinOp op;
-    std::vector<std::shared_ptr<Expr>> ops;
-    BinExpr(BinOp o, std::vector<std::shared_ptr<Expr>> v)
-        : op(o), ops(std::move(v)) {}
-    std::string emit() const override {
-        std::ostringstream os;
-        os << '(';
-        for(std::size_t i=0;i<ops.size();++i){
-            if(i) os << ' ' << tok(op) << ' ';
-            os << ops[i]->emit();
+    inline const char *tok(BinOp o)
+    {
+        switch (o)
+        {
+        case BinOp::Add:
+            return "+";
+        case BinOp::Sub:
+            return "-";
+        case BinOp::And:
+            return "&";
+        case BinOp::Or:
+            return "|";
+        case BinOp::Xor:
+            return "^";
         }
-        os << ')';
-        return os.str();
+        return "?";
     }
-    uint32_t eval() const override {
-        uint32_t acc = ops.front()->eval();
-        for(std::size_t i=1;i<ops.size();++i){
-            uint32_t rhs = ops[i]->eval();
-            switch(op){
-                case BinOp::Add: acc += rhs; break;
-                case BinOp::Sub: acc -= rhs; break;
-                case BinOp::Or : acc |= rhs; break;
-                case BinOp::And: acc &= rhs; break;
-                case BinOp::Xor: acc ^= rhs; break;
+
+    struct BinExpr final : Expr
+    {
+        BinOp op;
+        std::vector<std::shared_ptr<Expr>> ops;
+        BinExpr(BinOp o, std::vector<std::shared_ptr<Expr>> v)
+            : op(o), ops(std::move(v)) {}
+
+        std::string emit() const override
+        {
+            std::ostringstream os;
+            os << '(';
+            for (std::size_t i = 0; i < ops.size(); ++i)
+            {
+                if (i)
+                    os << ' ' << tok(op) << ' ';
+                os << ops[i]->emit();
             }
+            os << ')';
+            return os.str();
         }
-        return acc;
-    }
-};
 
-// Module
-struct Assign { std::string lhs; std::shared_ptr<Expr> rhs;
-    std::string emit() const { return "assign " + lhs + " = " + rhs->emit() + ';'; } };
-
-struct Module {
-    std::string                          name;
-    std::vector<Assign>                  assigns;
-    std::vector<std::unique_ptr<Module>> children;
-    std::vector<std::string>             childNets;  // wires to children
-    bool                                 isTop = false;
-};
-
-// Hierarchy fuzz
-class HierarchyGenerator {
-public:
-    explicit HierarchyGenerator(unsigned seed = std::random_device{}()) : rng(seed) {}
-    std::unique_ptr<Module> make(const std::string& topName, int depth){
-        return rec(topName, 0, depth);
-    }
-private:
-    std::mt19937 rng;
-    std::uniform_int_distribution<int> leafVal{0,15}, fanout{2,4}, opPick{0,4};
-
-    static BinOp opFromIdx(int i){
-        switch(i){ case 0: return BinOp::Add; case 1: return BinOp::Sub;
-                   case 2: return BinOp::Xor; case 3: return BinOp::And;
-                   default: return BinOp::Or; }
-    }
-
-    std::unique_ptr<Module> rec(const std::string& name,int d,int maxD){
-        auto m = std::make_unique<Module>();
-        m->name = name; m->isTop = (d==0);
-        if(d==maxD){
-            m->assigns.push_back({"out",
-                                  std::make_shared<Const>(leafVal(rng))});
-            return m;
+        uint32_t eval() const override
+        {
+            uint32_t acc = ops.front()->eval();
+            for (std::size_t i = 1; i < ops.size(); ++i)
+            {
+                uint32_t r = ops[i]->eval();
+                switch (op)
+                {
+                case BinOp::Add:
+                    acc += r;
+                    break;
+                case BinOp::Sub:
+                    acc -= r;
+                    break;
+                case BinOp::And:
+                    acc &= r;
+                    break;
+                case BinOp::Or:
+                    acc |= r;
+                    break;
+                case BinOp::Xor:
+                    acc ^= r;
+                    break;
+                }
+            }
+            return acc;
         }
-        int n = fanout(rng);
-        std::vector<std::shared_ptr<Expr>> refs;
-        for(int i=0;i<n;++i){
-            auto child = rec(name+"_c"+std::to_string(i), d+1, maxD);
-            std::string net = child->name + "_out";
-            m->childNets.push_back(net);
-            refs.push_back(std::make_shared<WireRef>(net));
-            child->assigns.front().lhs = "out";
-            m->children.push_back(std::move(child));
-        }
-        BinOp op = opFromIdx(opPick(rng));
-        m->assigns.push_back({"out", std::make_shared<BinExpr>(op,refs)});
-        return m;
-    }
-};
+    };
 
-// Verilog emit
-inline void emitModule(const Module& m, std::ostream& os, int ind = 0){
-    std::string s(ind, ' ');
-    os << s << "module " << m.name << " (\n";
-    os << s << "    output [31:0] out\n" << s << ");\n";
+    /*───────────────────────────────────────────────────────────────*/
+    /* 2.  Statement-level AST                                       */
+    /*───────────────────────────────────────────────────────────────*/
+    inline std::string ind(int n) { return std::string(n, ' '); }
 
-    for(const auto& w : m.childNets) os << s << "wire [31:0] " << w << ";\n";
-
-    for(const auto& cptr : m.children){
-        const Module& c = *cptr;
-        os << s << c.name << ' ' << c.name << "_inst ( .out(" << c.name << "_out) );\n";
-    }
-    for(const auto& a : m.assigns) os << s << a.emit() << "\n";
-    os << s << "endmodule\n\n";
-
-    for(const auto& cptr : m.children) emitModule(*cptr, os, ind);
-}
-
-inline std::string emitVerilog(const Module& top){
-    std::ostringstream os;
-    emitModule(top, os);
-    return os.str();
-}
-
-/* ===================================================================
-   'Legacy' generator wrappers (from old verigen_generate.hpp &
-   verigen_generate_for.hpp).
-   =================================================================== */
-namespace legacy {
-
-// operator support
-inline BinOp binOpFromChar(char c){
-    switch(c){
-        case '+': return BinOp::Add;
-        case '-': return BinOp::Sub;
-        case '^': return BinOp::Xor;
-        case '&': return BinOp::And;
-        case '|': return BinOp::Or;
-        default : throw std::invalid_argument("invalid op");
-    }
-}
-
-/* ================================================================
-   1.  VerilogGenerator      – random constants, generate‑block inst
-   ================================================================ */
-class VerilogGenerator {
-    std::mt19937 rng;
-    static inline const std::vector<char> OPS{'+','^'/*,'&','|','-',*/};
-public:
-    explicit VerilogGenerator(unsigned seed = std::random_device{}())
-        : rng(seed) {}
-
-    std::pair<std::filesystem::path,uint32_t>
-    make(unsigned idx,int Nconst = 5)
+    struct Stmt
     {
-        // build constants
-        std::vector<std::shared_ptr<Const>> C;
-        std::uniform_int_distribution<uint32_t> dist(0,0xffffffffu);
-        for(int i=0;i<Nconst;++i){
-            uint32_t val = dist(rng);
-            C.push_back(std::make_shared<Const>(val,"c"+std::to_string(i)));
-        }
+        virtual ~Stmt() = default;
+        virtual std::string emit(int) = 0;
+    };
 
-        // random expression tree
-        std::uniform_int_distribution<int> opSel(0, (int)OPS.size() - 1);
-        std::shared_ptr<Expr> expr = C[0];
-        for(int i=1;i<Nconst;++i){
-            char opCh = OPS[opSel(rng)];
-            expr = std::make_shared<BinExpr>(binOpFromChar(opCh),
-                                             std::vector<std::shared_ptr<Expr>>{expr, C[i]});
-        }
-        uint32_t expected = expr->eval();
-
-        /* ---- write Verilog file -------------------------------- */
-        std::filesystem::path fname = "fuzz_" + std::to_string(idx) + ".v";
-        std::ofstream f(fname);
-        if(!f) throw std::runtime_error("cannot open "+fname.string());
-
-        f << "// auto‑generated by VerilogGenerator\n`timescale 1ns/1ps\n\n"
-          << "module constant_block #(parameter VALUE=32'h0)(out);\n"
-          << "  output [31:0] out;\n  assign out = VALUE;\nendmodule\n\n"
-          << "module top(result);\n  output [31:0] result;\n";
-
-        for(auto& c : C)
-            f << "  wire [31:0] " << c->sym << ";\n";
-
-        f << "  generate\n";
-        for(auto& c : C){
-            f << "    constant_block #(32'h" << std::hex << std::setw(8) << std::setfill('0')
-              << c->value << std::dec << ") inst_" << c->sym
-              << " (.out(" << c->sym << "));\n";
-        }
-        f << "  endgenerate\n"
-          << "  assign result = " << expr->emit() << ";\nendmodule\n";
-
-        return {fname, expected};
-    }
-};
-
-/* ================================================================
-   2.  VerilogGeneratorFor   – deterministic constants, for‑loop gen
-   ================================================================ */
-class VerilogGeneratorFor {
-    std::mt19937 rng;
-    static inline const std::vector<char> OPS{'+','^'/*,'&','|','-',*/};
-    // deterministic formula – identical in C++ & Verilog
-    static constexpr uint32_t K1 = 0x9E37'79B9;
-    static constexpr uint32_t K2 = 0xBA55'ED5A;
-
-    static constexpr uint32_t const_val(unsigned i,unsigned seed){
-        return ((i+1)*K1) ^ (seed*K2);
-    }
-public:
-    explicit VerilogGeneratorFor(unsigned seed = std::random_device{}())
-        : rng(seed) {}
-
-    std::pair<std::filesystem::path,uint32_t>
-    make(unsigned idx,int Nconst = 5)
+    /* continuous assignment */
+    struct AssignStmt final : Stmt
     {
-        // deterministic constants
-        std::vector<std::shared_ptr<Const>> C;
-        for(int i=0;i<Nconst;++i){
-            uint32_t val = const_val(i, idx);
-            C.push_back(std::make_shared<Const>(val,"g["+std::to_string(i)+"]"));
+        std::string lhs;
+        std::shared_ptr<Expr> rhs;
+        AssignStmt(std::string l, std::shared_ptr<Expr> r) : lhs(std::move(l)), rhs(std::move(r)) {}
+        std::string emit(int i) override { return ind(i) + "assign " + lhs + " = " + rhs->emit() + ";"; }
+    };
+
+    /* simple module instance */
+    struct Instance final : Stmt
+    {
+        std::string mod, inst;
+        std::vector<std::string> params;
+        std::vector<std::pair<std::string, std::string>> conns;
+        Instance(std::string m, std::string n,
+                 std::vector<std::string> p,
+                 std::vector<std::pair<std::string, std::string>> c)
+            : mod(std::move(m)), inst(std::move(n)), params(std::move(p)), conns(std::move(c)) {}
+        std::string emit(int i) override
+        {
+            std::ostringstream os;
+            os << ind(i) << mod;
+            if (!params.empty())
+            {
+                os << " #(";
+                for (std::size_t k = 0; k < params.size(); ++k)
+                {
+                    if (k)
+                        os << ", ";
+                    os << params[k];
+                }
+                os << ')';
+            }
+            os << ' ' << inst << " (";
+            for (std::size_t k = 0; k < conns.size(); ++k)
+            {
+                if (k)
+                    os << ", ";
+                os << '.' << conns[k].first << "(" << conns[k].second << ')';
+            }
+            os << ");";
+            return os.str();
+        }
+    };
+
+    /* arbitrary text */
+    struct CustomStmt final : Stmt
+    {
+        std::function<std::string(int)> fn;
+        explicit CustomStmt(std::function<std::string(int)> f) : fn(std::move(f)) {}
+        std::string emit(int i) override { return fn(i); }
+    };
+
+    /* for-generate loop (assumes already inside generate) */
+    struct GenerateFor final : Stmt
+    {
+        std::string var, label;
+        int start, end;
+        std::vector<std::shared_ptr<Stmt>> body;
+        GenerateFor(std::string v, std::string l, int s, int e,
+                    std::vector<std::shared_ptr<Stmt>> b)
+            : var(std::move(v)), label(std::move(l)), start(s), end(e), body(std::move(b)) {}
+        std::string emit(int i) override
+        {
+            std::ostringstream os;
+            os << ind(i) << "genvar " << var << ";\n";
+            os << ind(i) << "for(" << var << '=' << start << "; " << var << '<' << end << "; "
+               << var << '=' << var << "+1) begin : " << label << "\n";
+            for (auto &s : body)
+                os << s->emit(i + 4) << "\n";
+            os << ind(i) << "end";
+            return os.str();
+        }
+    };
+
+    /* if-generate */
+    struct GenerateIf final : Stmt
+    {
+        std::shared_ptr<Expr> cond;
+        std::vector<std::shared_ptr<Stmt>> t, e;
+        GenerateIf(std::shared_ptr<Expr> c,
+                   std::vector<std::shared_ptr<Stmt>> t_,
+                   std::vector<std::shared_ptr<Stmt>> e_ = {})
+            : cond(std::move(c)), t(std::move(t_)), e(std::move(e_)) {}
+        std::string emit(int i) override
+        {
+            std::ostringstream os;
+            os << ind(i) << "if(" << cond->emit() << ") begin\n";
+            for (auto &s : t)
+                os << s->emit(i + 2) << "\n";
+            if (!e.empty())
+            {
+                os << ind(i) << "end else begin\n";
+                for (auto &s : e)
+                    os << s->emit(i + 2) << "\n";
+            }
+            os << ind(i) << "end";
+            return os.str();
+        }
+    };
+
+    /* case-generate */
+    struct GenerateCase final : Stmt
+    {
+        std::shared_ptr<Expr> sel;
+        std::vector<std::pair<std::shared_ptr<Expr>,
+                              std::vector<std::shared_ptr<Stmt>>>>
+            cases;
+        std::vector<std::shared_ptr<Stmt>> def;
+        GenerateCase(std::shared_ptr<Expr> s,
+                     decltype(cases) c,
+                     std::vector<std::shared_ptr<Stmt>> d = {})
+            : sel(std::move(s)), cases(std::move(c)), def(std::move(d)) {}
+        std::string emit(int i) override
+        {
+            std::ostringstream os;
+            os << ind(i) << "case(" << sel->emit() << ")\n";
+            for (auto &kv : cases)
+            {
+                os << ind(i) << "  " << kv.first->emit() << ": begin\n";
+                for (auto &s : kv.second)
+                    os << s->emit(i + 4) << "\n";
+                os << ind(i) << "  end\n";
+            }
+            if (!def.empty())
+            {
+                os << ind(i) << "  default: begin\n";
+                for (auto &s : def)
+                    os << s->emit(i + 4) << "\n";
+                os << ind(i) << "  end\n";
+            }
+            os << ind(i) << "endcase";
+            return os.str();
+        }
+    };
+
+    /*───────────────────────────────────────────────────────────────*/
+    /* 3.  Module container                                          */
+    /*───────────────────────────────────────────────────────────────*/
+    struct Module
+    {
+        std::string name;
+        std::vector<std::shared_ptr<Stmt>> body;
+        std::vector<std::string> ports;
+        std::string emit() const
+        {
+            std::ostringstream os;
+            os << "module " << name << "(\n";
+            for (std::size_t i = 0; i < ports.size(); ++i)
+                os << "    " << ports[i] << (i + 1 < ports.size() ? ",\n" : "\n");
+            os << ");\n";
+            for (auto &s : body)
+                os << s->emit(2) << "\n";
+            os << "endmodule\n";
+            return os.str();
+        }
+    };
+
+    /*───────────────────────────────────────────────────────────────*/
+    /* 4.  Hierarchical random generator                             */
+    /*───────────────────────────────────────────────────────────────*/
+    class Generator
+    {
+        std::mt19937 rng;
+
+        /* ONLY '+' and '^' are allowed now */
+        static inline const std::vector<char> OPS{'+', '^'};
+        static BinOp opFromChar(char c) { return (c == '+') ? BinOp::Add : BinOp::Xor; }
+
+        /* shorthand for const_block instantiation */
+        static std::shared_ptr<Stmt> constInst(const std::string &w, const std::string &tgt)
+        {
+            return std::make_shared<Instance>("const_block", "inst",
+                                              std::vector<std::string>{w},
+                                              std::vector<std::pair<std::string, std::string>>{{"w", tgt}});
         }
 
-        // random expression over those constants
-        std::uniform_int_distribution<int> opSel(0, (int)OPS.size() - 1);
-        std::shared_ptr<Expr> expr = C[0];
-        for(int i=1;i<Nconst;++i){
-            char opCh = OPS[opSel(rng)];
-            expr = std::make_shared<BinExpr>(binOpFromChar(opCh),
-                                             std::vector<std::shared_ptr<Expr>>{expr, C[i]});
+    public:
+        bool doHierarchy, doFor, doIf, doCase;
+        Generator(bool h, bool f, bool i, bool c, unsigned seed)
+            : rng(seed), doHierarchy(h), doFor(f), doIf(i), doCase(c) {}
+
+        /* recursive builder */
+        std::shared_ptr<Stmt>
+        buildNested(int level, int maxDepth, int N,
+                    const std::string &out,
+                    std::vector<std::shared_ptr<Stmt>> &decls)
+        {
+            /* base case -> const block */
+            if (level == maxDepth)
+            {
+                std::ostringstream p;
+                p << "(32'h"
+                  << std::hex << std::setw(8) << std::setfill('0')
+                  << (0xDEADBEEF + level) << ')';
+                return constInst(p.str(), out);
+            }
+
+            /* choose construct */
+            std::vector<int> choices;
+            if (doFor)
+                choices.push_back(0);
+            if (doIf)
+                choices.push_back(1);
+            if (doCase)
+                choices.push_back(2);
+            if (choices.empty())
+                choices.push_back(0);
+
+            int pick = choices[rng() % choices.size()];
+
+            /* ---------- FOR ---------- */
+            if (pick == 0)
+            {
+                std::string var = "g" + std::to_string(level);
+                std::string lbl = "lvl" + std::to_string(level);
+                std::string arr = "t" + std::to_string(level);
+
+                decls.push_back(std::make_shared<CustomStmt>(
+                    [arr, N](int i)
+                    { std::ostringstream os;
+                                os<<ind(i)<<"wire [31:0] "<<arr<<" [0:"<<N-1<<"];";
+                                return os.str(); }));
+
+                std::vector<std::shared_ptr<Stmt>> body;
+                body.push_back(buildNested(level + 1, maxDepth, N,
+                                           arr + "[" + var + "]", decls));
+
+                std::ostringstream red;
+                red << arr << "[0]";
+                for (int k = 1; k < N; ++k)
+                    red << " ^ " << arr << "[" << k << "]";
+
+                body.push_back(std::make_shared<AssignStmt>(
+                    out, std::make_shared<WireRef>(red.str())));
+
+                return std::make_shared<GenerateFor>(var, lbl, 0, N, std::move(body));
+            }
+
+            /* ---------- IF ---------- */
+            if (pick == 1)
+            {
+                auto cond = std::make_shared<Const>(1);
+                std::vector<std::shared_ptr<Stmt>> thenB{
+                    buildNested(level + 1, maxDepth, N, out, decls)};
+                return std::make_shared<GenerateIf>(cond, thenB);
+            }
+
+            /* ---------- CASE ---------- */
+            auto inner = buildNested(level + 1, maxDepth, N, out, decls);
+            auto sel = std::make_shared<WireRef>("sel");
+            return std::make_shared<GenerateCase>(sel,
+                                                  std::vector<std::pair<std::shared_ptr<Expr>,
+                                                                        std::vector<std::shared_ptr<Stmt>>>>{
+                                                      {std::make_shared<Const>(0), {inner}}});
         }
-        uint32_t expected = expr->eval();
 
-        // write Verilog
-        std::filesystem::path fname = "fuzz_for_" + std::to_string(idx) + ".v";
-        std::ofstream f(fname);
-        if(!f) throw std::runtime_error("cannot open "+fname.string());
+        /* ---------------------------------------------------------- */
+        std::pair<std::filesystem::path, uint32_t>
+        make(const std::string &topName, int idx, int depth = 2, int N = 4)
+        {
+            Module top;
+            top.name = topName;
+            top.ports = {"output [31:0] result"};
 
-        f << "// auto‑generated by VerilogGeneratorFor\n`timescale 1ns/1ps\n\n"
-          << "module const_block #(parameter VALUE=32'h0)(output [31:0] w);\n"
-          << "  assign w = VALUE;\nendmodule\n\n"
-          << "module top(result);\n  output [31:0] result;\n"
-          << "  wire [31:0] g[" << Nconst << "];\n"
-          << "  genvar gi;\n  generate\n"
-          << "    for(gi=0; gi<" << Nconst << "; gi=gi+1) begin : g_blk\n"
-          << "      const_block #( ((gi + 1) * 32'h" << std::hex << K1 << std::dec
-          << ") ^ (32'd" << idx << " * 32'h" << std::hex << K2 << std::dec
-          << ") ) inst ( .w(g[gi]) );\n"
-          << "    end\n"
-          << "  endgenerate\n\n"
-          << "  assign result = " << expr->emit() << ";\nendmodule\n";
+            /* declare top-level array */
+            top.body.push_back(std::make_shared<CustomStmt>(
+                [N](int i)
+                { std::ostringstream os;
+                        os<<ind(i)<<"wire [31:0] g [0:"<<N-1<<"];";
+                        return os.str(); }));
 
-        //std::cout << "EXPECTED: " << expected << "\n";
-        return {fname, expected};
-    }
-};
+            std::vector<std::shared_ptr<Stmt>> decls;
+            auto outer = buildNested(0, depth, N, "g[g0]", decls);
 
-} // namespace legacy
+            /* one generate/endgenerate wrapper */
+            top.body.insert(top.body.end(), decls.begin(), decls.end());
+            top.body.push_back(std::make_shared<CustomStmt>(
+                [outer](int i)
+                {
+                    std::ostringstream os;
+                    os << ind(i) << "generate\n"
+                       << outer->emit(i + 2) << "\n"
+                       << ind(i) << "endgenerate";
+                    return os.str();
+                }));
+
+            /* XOR reduction */
+            std::shared_ptr<Expr> acc = std::make_shared<WireRef>("g[0]");
+            for (int k = 1; k < N; ++k)
+                acc = std::make_shared<BinExpr>(BinOp::Xor,
+                                                std::vector<std::shared_ptr<Expr>>{
+                                                    acc, std::make_shared<WireRef>("g[" + std::to_string(k) + "]")});
+            top.body.push_back(std::make_shared<AssignStmt>("result", acc));
+
+            /* dump Verilog file */
+            std::filesystem::path fn = "gen_" + std::to_string(idx) + ".v";
+            std::ofstream f(fn);
+            if (!f)
+                throw std::runtime_error("open " + fn.string());
+            f << "// generated by veri::Generator\ntimescale 1ns/1ps\n\n";
+            f << "module const_block #(parameter VALUE=32'h0)(output [31:0] w);\n"
+              << "  assign w = VALUE;\nendmodule\n\n";
+            f << top.emit();
+
+            return {fn, 0};
+        }
+    };
 
 } // namespace veri
