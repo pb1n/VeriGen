@@ -9,6 +9,7 @@ inline int quiet_system(std::string cmd, bool verbose)
 #else
     if (!verbose) cmd += " >/dev/null 2>&1";
 #endif
+    if (verbose) std::cout << "Running command: " << cmd << "\n";
     return std::system(cmd.c_str());
 }
 

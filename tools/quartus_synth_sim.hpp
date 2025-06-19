@@ -33,21 +33,21 @@ public:
         f<<"project_new "<<project<<" -overwrite\n"
          <<"set_global_assignment -name FAMILY \"Cyclone V\"\n"
          <<"set_global_assignment -name TOP_LEVEL_ENTITY "<<top<<"\n"
-         <<"set_global_assignment -name VERILOG_FILE \""<<fs::absolute(rtl).generic_string()<<"\"\n"
+         <<"set_global_assignment -name SYSTEMVERILOG_FILE \""<<fs::absolute(rtl).generic_string()<<"\"\n"
          <<"load_package flow\nexecute_module -tool map\nproject_close\n";
         return true;
     }
 
     bool runQuartus() const {
         std::string cd = std::string("cd ") + (dir.string()) + " && ";
-        std::string qsh = std::string(quartusRoot) + "/bin/quartus_sh -t " + tcl.filename().string();
-        std::string fit = std::string(quartusRoot) + "/bin/quartus_fit " + project;
+        std::string qsh = "quartus_sh -t " + tcl.filename().string();
+        std::string fit = "quartus_fit " + project;
         return quiet_system(cd + qsh, chat) == 0 && quiet_system(cd + fit, chat) == 0;
     }
 
     bool exportVo() const {
         std::string cd = std::string("cd ") + (dir.string()) + " && ";
-        std::string eda = std::string(quartusRoot) + "/bin/quartus_eda --simulation=on --tool=modelsim --format=verilog " + project;
+        std::string eda = "quartus_eda --simulation=on --tool=modelsim --format=verilog " + project;
         return quiet_system(cd + eda, chat) == 0;
     }
 
@@ -75,6 +75,7 @@ public:
          <<"  $QUARTUS/eda/sim_lib/220model.v \\\n"
          <<"  $QUARTUS/eda/sim_lib/sgate.v \\\n"
          <<"  $QUARTUS/eda/sim_lib/cyclonev_atoms.v\n"
+         <<"  pwd\n"
          <<"vlog \"simulation/modelsim/"<<project<<".vo\"\n"
          <<"vlog tb.v\nvsim -t 1ps work.tb\nrun -all\nquit -f\n";
         return true;
@@ -82,9 +83,10 @@ public:
 
     uint32_t runModelSim() const {
 #ifdef _WIN32
-        std::string cmd = "cd /d \"" + dir.string() + "\" && vsim -l vsim_log.txt -do \"do run.do\"";
+
+        std::string cmd = "cd /d \"" + dir.string() + "\" && vsim -c -l vsim_log.txt -do \"do run.do\" > NUL 2>&1";
 #else
-        std::string cmd = "cd \"" + dir.string() + "\" && vsim -l vsim_log.txt -do \"do run.do\"";
+        std::string cmd = "cd \"" + dir.string() + "\" && vsim -c -l vsim_log.txt -do \"do run.do\"";
 #endif
         if (std::system(cmd.c_str()) != 0) throw std::runtime_error("vsim failed");
         std::ifstream log(dir/"vsim_log.txt"); std::string l,h;
