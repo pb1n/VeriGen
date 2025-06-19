@@ -18,14 +18,20 @@
 namespace fs = std::filesystem;
 
 /*───────────────────────────────────────────────────────────────*/
-/*  CLI options                                                  */
+/* CLI options                                                  */
 /*───────────────────────────────────────────────────────────────*/
 struct Opt
 {
     int iter = 1;
     unsigned seed = std::random_device{}();
-    int tool = 1; // 1 = Quartus, 2 = Icarus/ModelSim
+    int tool = 1; 
     bool chat = false;
+    // New options for loop fuzzing
+    int min_start = 0;
+    int max_start = 0;
+    int min_iter = 2;
+    int max_iter = 16;
+    bool random_update = true;
 };
 
 Opt parse(int argc, char *argv[])
@@ -42,10 +48,20 @@ Opt parse(int argc, char *argv[])
             o.tool = std::stoi(argv[++i]);
         else if (a == "--chat" || a == "-c")
             o.chat = true;
+        else if (a == "--min-start" && i + 1 < argc)
+             o.min_start = std::stoi(argv[++i]);
+        else if (a == "--max-start" && i + 1 < argc)
+             o.max_start = std::stoi(argv[++i]);
+        else if (a == "--min-iter" && i + 1 < argc)
+             o.min_iter = std::stoi(argv[++i]);
+        else if (a == "--max-iter" && i + 1 < argc)
+             o.max_iter = std::stoi(argv[++i]);
         else
         {
             std::cerr << "Usage: " << argv[0]
-                      << " [-n N] [-s SEED] [-t TOOL] [-c]\n";
+                      << " [-n N] [-s SEED] [-t TOOL] [-c]\n"
+                      << "   [--min-start MIN] [--max-start MAX]\n"
+                      << "   [--min-iter MIN] [--max-iter MAX]\n";
             std::exit(1);
         }
     }
@@ -58,16 +74,14 @@ Opt parse(int argc, char *argv[])
 }
 
 /*───────────────────────────────────────────────────────────────*/
-/*  Main                                                         */
+/* Main                                                         */
 /*───────────────────────────────────────────────────────────────*/
 int main(int argc, char *argv[])
 {
     Opt opt = parse(argc, argv);
 
-    veri::Generator gen(false, /*for*/ true, /*if*/ false, /*case*/ false,
-                        opt.seed);
+    veri::Generator gen(opt.seed, opt.min_start, opt.max_start, opt.min_iter, opt.max_iter, opt.random_update);
 
-    /* -- select tool(s) exactly as before -- */
     std::vector<std::unique_ptr<Tool>> tools;
     switch (opt.tool)
     {
@@ -86,24 +100,24 @@ int main(int argc, char *argv[])
     }
 
     Session sess("build");
-    indicators::BlockProgressBar bar{/* …unchanged… */};
+    indicators::BlockProgressBar bar{
+        indicators::option::MaxProgress{static_cast<size_t>(opt.iter)},
+        indicators::option::BarWidth{50},
+        indicators::option::ShowElapsedTime{true},
+        indicators::option::ShowRemainingTime{true},
+        indicators::option::PrefixText{"Fuzzing "}
+    };
 
     for (int i = 0; i < opt.iter; ++i)
     {
-
-        /* -------------- create iteration folder ---------------- */
         fs::path runDir = sess.next();
-
-        /* -------------- generate Verilog *inside* runDir ------- */
         fs::path oldCwd = fs::current_path();
-        fs::current_path(runDir); // ← temporally cd
-        auto [rtlName, expected] = gen.make("top", i, 2, 2);
-        fs::current_path(oldCwd); // ← restore
+        fs::current_path(runDir); 
+        auto [rtlName, expected] = gen.make("top", i, 2);
+        fs::current_path(oldCwd);
 
-        /*  rtlName is just "gen_<idx>.v", build full path once  */
         fs::path rtl = runDir / rtlName;
 
-        /* -------------- run selected EDA tool(s) --------------- */
         for (auto &t : tools)
         {
             fs::path tDir = runDir / t->name();

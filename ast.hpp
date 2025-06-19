@@ -1,8 +1,8 @@
 #pragma once
 /*───────────────────────────────────────────────────────────────*
- *  Compact hierarchical-test-source generator for Verilog       *
- *  – outer generate/endgenerate wrapper                         *
- *  – ADD / XOR only                                             *
+ * Compact hierarchical-test-source generator for Verilog       *
+ * – outer generate/endgenerate wrapper                         *
+ * – ADD / XOR only                                             *
  *───────────────────────────────────────────────────────────────*/
 
 #include <cstdint>
@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <functional>
+#include <algorithm>
 
 namespace veri
 {
@@ -28,7 +29,7 @@ namespace veri
     {
         virtual ~Expr() = default;
         virtual std::string emit() const = 0;
-        virtual uint32_t eval() const = 0;
+        virtual uint32_t eval(const std::vector<uint32_t>& values) const = 0;
     };
 
     /* constant literal or aliased symbol */
@@ -37,26 +38,29 @@ namespace veri
         uint32_t value;
         std::string sym;
         Const(uint32_t v, std::string s = {}) : value(v), sym(std::move(s)) {}
-        std::string emit() const override { return sym.empty() ? "32'd" + std::to_string(value) : sym; }
-        uint32_t eval() const override { return value; }
+        std::string emit() const override { return sym; }
+        uint32_t eval(const std::vector<uint32_t>& /*values*/) const override { return value; }
     };
 
     /* reference to an existing net */
     struct WireRef final : Expr
     {
         std::string name;
-        explicit WireRef(std::string n) : name(std::move(n)) {}
+        int index; // Store index for evaluation
+        explicit WireRef(std::string n, int idx = -1) : name(std::move(n)), index(idx) {}
         std::string emit() const override { return name; }
-        uint32_t eval() const override { throw std::logic_error("WireRef not const-foldable"); }
+        uint32_t eval(const std::vector<uint32_t>& values) const override {
+            if (index < 0 || static_cast<size_t>(index) >= values.size()) {
+                 throw std::out_of_range("WireRef evaluation index out of range.");
+            }
+            return values[index];
+        }
     };
 
     /* binary expression ─ (op restricted later) */
     enum class BinOp
     {
         Add,
-        Sub,
-        And,
-        Or,
         Xor
     };
 
@@ -66,12 +70,6 @@ namespace veri
         {
         case BinOp::Add:
             return "+";
-        case BinOp::Sub:
-            return "-";
-        case BinOp::And:
-            return "&";
-        case BinOp::Or:
-            return "|";
         case BinOp::Xor:
             return "^";
         }
@@ -99,25 +97,17 @@ namespace veri
             return os.str();
         }
 
-        uint32_t eval() const override
+        uint32_t eval(const std::vector<uint32_t>& values) const override
         {
-            uint32_t acc = ops.front()->eval();
+            if (ops.empty()) return 0;
+            uint32_t acc = ops.front()->eval(values);
             for (std::size_t i = 1; i < ops.size(); ++i)
             {
-                uint32_t r = ops[i]->eval();
+                uint32_t r = ops[i]->eval(values);
                 switch (op)
                 {
                 case BinOp::Add:
                     acc += r;
-                    break;
-                case BinOp::Sub:
-                    acc -= r;
-                    break;
-                case BinOp::And:
-                    acc &= r;
-                    break;
-                case BinOp::Or:
-                    acc |= r;
                     break;
                 case BinOp::Xor:
                     acc ^= r;
@@ -165,13 +155,11 @@ namespace veri
             if (!params.empty())
             {
                 os << " #(";
-                for (std::size_t k = 0; k < params.size(); ++k)
-                {
-                    if (k)
-                        os << ", ";
+                for(size_t k = 0; k < params.size(); ++k) {
+                    if (k > 0) os << ", ";
                     os << params[k];
                 }
-                os << ')';
+                os << ")";
             }
             os << ' ' << inst << " (";
             for (std::size_t k = 0; k < conns.size(); ++k)
@@ -197,45 +185,22 @@ namespace veri
     struct GenerateFor final : Stmt
     {
         std::string var, label;
-        int start, end;
+        int start;
+        std::string condition, update_expr;
         std::vector<std::shared_ptr<Stmt>> body;
-        GenerateFor(std::string v, std::string l, int s, int e,
+
+        GenerateFor(std::string v, std::string l, int s, std::string c, std::string u,
                     std::vector<std::shared_ptr<Stmt>> b)
-            : var(std::move(v)), label(std::move(l)), start(s), end(e), body(std::move(b)) {}
+            : var(std::move(v)), label(std::move(l)), start(s),
+              condition(std::move(c)), update_expr(std::move(u)), body(std::move(b)) {}
+
         std::string emit(int i) override
         {
             std::ostringstream os;
             os << ind(i) << "genvar " << var << ";\n";
-            os << ind(i) << "for(" << var << '=' << start << "; " << var << '<' << end << "; "
-               << var << '=' << var << "+1) begin : " << label << "\n";
+            os << ind(i) << "for(" << var << '=' << start << "; " << condition << "; " << update_expr << ") begin : " << label << "\n";
             for (auto &s : body)
                 os << s->emit(i + 4) << "\n";
-            os << ind(i) << "end";
-            return os.str();
-        }
-    };
-
-    /* if-generate */
-    struct GenerateIf final : Stmt
-    {
-        std::shared_ptr<Expr> cond;
-        std::vector<std::shared_ptr<Stmt>> t, e;
-        GenerateIf(std::shared_ptr<Expr> c,
-                   std::vector<std::shared_ptr<Stmt>> t_,
-                   std::vector<std::shared_ptr<Stmt>> e_ = {})
-            : cond(std::move(c)), t(std::move(t_)), e(std::move(e_)) {}
-        std::string emit(int i) override
-        {
-            std::ostringstream os;
-            os << ind(i) << "if(" << cond->emit() << ") begin\n";
-            for (auto &s : t)
-                os << s->emit(i + 2) << "\n";
-            if (!e.empty())
-            {
-                os << ind(i) << "end else begin\n";
-                for (auto &s : e)
-                    os << s->emit(i + 2) << "\n";
-            }
             os << ind(i) << "end";
             return os.str();
         }
@@ -259,23 +224,28 @@ namespace veri
             os << ind(i) << "case(" << sel->emit() << ")\n";
             for (auto &kv : cases)
             {
-                os << ind(i) << "  " << kv.first->emit() << ": begin\n";
-                for (auto &s : kv.second)
-                    os << s->emit(i + 4) << "\n";
-                os << ind(i) << "  end\n";
+                os << ind(i+2) << kv.first->emit() << ": ";
+                if(kv.second.size() == 1) {
+                     os << kv.second[0]->emit(0) << "\n";
+                } else {
+                    os << "begin\n";
+                    for (auto &s : kv.second)
+                        os << s->emit(i + 4) << "\n";
+                    os << ind(i+2) << "end\n";
+                }
             }
             if (!def.empty())
             {
-                os << ind(i) << "  default: begin\n";
+                os << ind(i+2) << "default: begin\n";
                 for (auto &s : def)
                     os << s->emit(i + 4) << "\n";
-                os << ind(i) << "  end\n";
+                os << ind(i+2) << "end\n";
             }
             os << ind(i) << "endcase";
             return os.str();
         }
     };
-
+    
     /*───────────────────────────────────────────────────────────────*/
     /* 3.  Module container                                          */
     /*───────────────────────────────────────────────────────────────*/
@@ -304,148 +274,203 @@ namespace veri
     class Generator
     {
         std::mt19937 rng;
+        static inline const std::vector<BinOp> OPS{BinOp::Add, BinOp::Xor};
+        std::vector<uint32_t> const_data;
+        std::vector<std::vector<std::shared_ptr<Expr>>> logic_trees;
+        std::vector<int> N_per_level;
+        std::shared_ptr<Expr> final_logic_tree;
+        
+        int min_start, max_start;
+        int min_iter, max_iter;
+        bool random_update;
 
-        /* ONLY '+' and '^' are allowed now */
-        static inline const std::vector<char> OPS{'+', '^'};
-        static BinOp opFromChar(char c) { return (c == '+') ? BinOp::Add : BinOp::Xor; }
-
-        /* shorthand for const_block instantiation */
-        static std::shared_ptr<Stmt> constInst(const std::string &w, const std::string &tgt)
+        static std::shared_ptr<Stmt> constInst(const std::string &w_param, const std::string &tgt)
         {
             return std::make_shared<Instance>("const_block", "inst",
-                                              std::vector<std::string>{w},
+                                              std::vector<std::string>{".VALUE(" + w_param + ")"},
                                               std::vector<std::pair<std::string, std::string>>{{"w", tgt}});
         }
 
-    public:
-        bool doHierarchy, doFor, doIf, doCase;
-        Generator(bool h, bool f, bool i, bool c, unsigned seed)
-            : rng(seed), doHierarchy(h), doFor(f), doIf(i), doCase(c) {}
+        std::shared_ptr<Stmt> buildNested(int level, int maxDepth, const std::string &out_base_name) {
+            
+            std::string var = "g" + std::to_string(level);
+            std::string lbl = "lvl" + std::to_string(level);
+            std::vector<std::shared_ptr<Stmt>> loop_body;
 
-        /* recursive builder */
-        std::shared_ptr<Stmt>
-        buildNested(int level, int maxDepth, int N,
-                    const std::string &out,
-                    std::vector<std::shared_ptr<Stmt>> &decls)
-        {
-            /* base case -> const block */
-            if (level == maxDepth)
-            {
-                std::ostringstream p;
-                p << "(32'h"
-                  << std::hex << std::setw(8) << std::setfill('0')
-                  << (0xDEADBEEF + level) << ')';
-                return constInst(p.str(), out);
+            std::uniform_int_distribution<> start_dist(min_start, max_start);
+            int start_val = start_dist(rng);
+
+            std::uniform_int_distribution<> iter_dist(min_iter, max_iter);
+            int num_iterations = iter_dist(rng);
+            if(static_cast<size_t>(level) < N_per_level.size()) {
+                N_per_level[level] = num_iterations;
             }
 
-            /* choose construct */
-            std::vector<int> choices;
-            if (doFor)
-                choices.push_back(0);
-            if (doIf)
-                choices.push_back(1);
-            if (doCase)
-                choices.push_back(2);
-            if (choices.empty())
-                choices.push_back(0);
-
-            int pick = choices[rng() % choices.size()];
-
-            /* ---------- FOR ---------- */
-            if (pick == 0)
-            {
-                std::string var = "g" + std::to_string(level);
-                std::string lbl = "lvl" + std::to_string(level);
-                std::string arr = "t" + std::to_string(level);
-
-                decls.push_back(std::make_shared<CustomStmt>(
-                    [arr, N](int i)
-                    { std::ostringstream os;
-                                os<<ind(i)<<"wire [31:0] "<<arr<<" [0:"<<N-1<<"];";
-                                return os.str(); }));
-
-                std::vector<std::shared_ptr<Stmt>> body;
-                body.push_back(buildNested(level + 1, maxDepth, N,
-                                           arr + "[" + var + "]", decls));
-
-                std::ostringstream red;
-                red << arr << "[0]";
-                for (int k = 1; k < N; ++k)
-                    red << " ^ " << arr << "[" << k << "]";
-
-                body.push_back(std::make_shared<AssignStmt>(
-                    out, std::make_shared<WireRef>(red.str())));
-
-                return std::make_shared<GenerateFor>(var, lbl, 0, N, std::move(body));
+            std::string update_expr, cond_expr, index;
+            bool increment = random_update ? (rng() % 2 == 0) : true;
+            
+            if (increment) {
+                update_expr = var + " = " + var + " + 1";
+                cond_expr = var + " < " + std::to_string(start_val + num_iterations);
+                index = var + " - " + std::to_string(start_val);
+            } else { 
+                update_expr = var + " = " + var + " - 1";
+                cond_expr = var + " > " + std::to_string(start_val - num_iterations);
+                index = std::to_string(start_val) + " - " + var;
             }
 
-            /* ---------- IF ---------- */
-            if (pick == 1)
-            {
-                auto cond = std::make_shared<Const>(1);
-                std::vector<std::shared_ptr<Stmt>> thenB{
-                    buildNested(level + 1, maxDepth, N, out, decls)};
-                return std::make_shared<GenerateIf>(cond, thenB);
-            }
 
-            /* ---------- CASE ---------- */
-            auto inner = buildNested(level + 1, maxDepth, N, out, decls);
-            auto sel = std::make_shared<WireRef>("sel");
-            return std::make_shared<GenerateCase>(sel,
-                                                  std::vector<std::pair<std::shared_ptr<Expr>,
-                                                                        std::vector<std::shared_ptr<Stmt>>>>{
-                                                      {std::make_shared<Const>(0), {inner}}});
+            if (level >= maxDepth) {
+                std::string const_param = "CONSTS0[(" + index + ")*32 +: 32]";
+                loop_body.push_back(constInst(const_param, out_base_name + "[(" + index + ")]"));
+            } else {
+                std::string next_level_arr = "t" + std::to_string(level + 1);
+                
+                // Recursively build the inner loop first to get its size
+                auto inner_loop = buildNested(level + 1, maxDepth, next_level_arr);
+                int next_level_iters = N_per_level[level+1];
+                
+                // Declare the wire array with the correct size
+                loop_body.push_back(std::make_shared<CustomStmt>(
+                    [next_level_arr, next_level_iters](int i){
+                        return ind(i) + "wire [31:0] " + next_level_arr + " [0:" + std::to_string(next_level_iters-1) + "];";
+                    }
+                ));
+                
+                loop_body.push_back(inner_loop);
+
+                std::vector<std::pair<std::shared_ptr<Expr>, std::vector<std::shared_ptr<Stmt>>>> case_items;
+                std::vector<std::shared_ptr<Expr>> level_logic;
+                for (int k = 0; k < num_iterations; ++k) {
+                    std::vector<std::shared_ptr<Stmt>> assign_body;
+                    
+                    std::uniform_int_distribution<> op_dist(0, OPS.size() - 1);
+                    std::shared_ptr<Expr> reduction_acc = std::make_shared<WireRef>(next_level_arr + "[0]", 0);
+                    for (int op_idx = 1; op_idx < next_level_iters; ++op_idx) {
+                        BinOp random_op = OPS[op_dist(rng)];
+                        reduction_acc = std::make_shared<BinExpr>(random_op, 
+                            std::vector<std::shared_ptr<Expr>>{
+                                reduction_acc, 
+                                std::make_shared<WireRef>(next_level_arr + "[" + std::to_string(op_idx) + "]", op_idx)
+                            });
+                    }
+                    level_logic.push_back(reduction_acc);
+                    
+                    std::string assign_lhs = out_base_name + "[" + std::to_string(k) + "]";
+                    assign_body.push_back(std::make_shared<AssignStmt>(assign_lhs, reduction_acc));
+                    
+                    case_items.push_back({std::make_shared<Const>(start_val + (increment ? k : -k), std::to_string(start_val + (increment ? k : -k))), std::move(assign_body)});
+                }
+                logic_trees.push_back(level_logic);
+                
+                auto sel = std::make_shared<WireRef>(var);
+                loop_body.push_back(std::make_shared<GenerateCase>(sel, std::move(case_items)));
+            }
+            return std::make_shared<GenerateFor>(var, lbl, start_val, cond_expr, update_expr, std::move(loop_body));
         }
 
-        /* ---------------------------------------------------------- */
+       uint32_t calculateExpectedResult() {
+            std::vector<uint32_t> current_level_values = const_data;
+            
+            for (size_t i = 0; i < logic_trees.size(); ++i) {
+                std::vector<uint32_t> next_level_values;
+                const auto& logic_for_this_level = logic_trees[i];
+
+                for (size_t k = 0; k < logic_for_this_level.size(); ++k) { 
+                    uint32_t val = logic_for_this_level[k]->eval(current_level_values);
+                    next_level_values.push_back(val);
+                }
+                current_level_values = next_level_values;
+            }
+            
+            return final_logic_tree->eval(current_level_values);
+        }
+
+    public:
+        // Constructor that matches the main.cpp call
+        Generator(unsigned seed, int min_s=0, int max_s=0, int min_i=2, int max_i=16, bool rand_up=true) 
+            : rng(seed), min_start(min_s), max_start(max_s), min_iter(min_i), max_iter(max_i), random_update(rand_up) {}
+
         std::pair<std::filesystem::path, uint32_t>
-        make(const std::string &topName, int idx, int depth = 2, int N = 4)
+        make(const std::string &topName, int idx, int depth = 2)
         {
             Module top;
             top.name = topName;
             top.ports = {"output [31:0] result"};
+            
+            const_data.clear();
+            logic_trees.clear();
+            final_logic_tree = nullptr;
+            N_per_level.assign(depth + 1, 0);
 
-            /* declare top-level array */
+            int maxDepth = (depth > 0) ? depth - 1 : 0;
+            
+            auto outer_loop_stmts = buildNested(0, maxDepth, "t0");
+
+            int top_N = N_per_level[0];
+            int base_N = N_per_level[maxDepth];
+
+            for (int j = 0; j < base_N; ++j) {
+                std::uniform_int_distribution<uint32_t> val_dist;
+                const_data.push_back(val_dist(rng));
+            }
+            
             top.body.push_back(std::make_shared<CustomStmt>(
-                [N](int i)
-                { std::ostringstream os;
-                        os<<ind(i)<<"wire [31:0] g [0:"<<N-1<<"];";
-                        return os.str(); }));
+                [base_N, this](int indent){
+                    std::ostringstream os;
+                    os << ind(indent) << "localparam [" << base_N*32-1 << ":0] CONSTS0 = {";
+                    for(int j=base_N-1; j>=0; --j) { 
+                        os << "32'h" << std::hex << std::setw(8) << std::setfill('0') << this->const_data[j];
+                        if (j > 0) os << ", ";
+                    }
+                    os << "};";
+                    return os.str();
+                }
+            ));
 
-            std::vector<std::shared_ptr<Stmt>> decls;
-            auto outer = buildNested(0, depth, N, "g[g0]", decls);
-
-            /* one generate/endgenerate wrapper */
-            top.body.insert(top.body.end(), decls.begin(), decls.end());
             top.body.push_back(std::make_shared<CustomStmt>(
-                [outer](int i)
-                {
+                [top_N](int i) {
+                    return ind(i) + "wire [31:0] t0 [0:" + std::to_string(top_N - 1) + "];";
+                }));
+
+            std::reverse(logic_trees.begin(), logic_trees.end());
+
+            top.body.push_back(std::make_shared<CustomStmt>(
+                [outer_loop_stmts](int i) {
                     std::ostringstream os;
                     os << ind(i) << "generate\n"
-                       << outer->emit(i + 2) << "\n"
+                       << outer_loop_stmts->emit(i + 2) << "\n"
                        << ind(i) << "endgenerate";
                     return os.str();
                 }));
+            
+            if (top_N > 0) {
+                std::uniform_int_distribution<> op_dist(0, OPS.size() - 1);
+                final_logic_tree = std::make_shared<WireRef>("t0[0]", 0);
+                for (int k = 1; k < top_N; ++k) {
+                     BinOp random_op = OPS[op_dist(rng)];
+                     final_logic_tree = std::make_shared<BinExpr>(random_op, 
+                        std::vector<std::shared_ptr<Expr>>{
+                            final_logic_tree, 
+                            std::make_shared<WireRef>("t0[" + std::to_string(k) + "]", k)
+                        });
+                }
+                top.body.push_back(std::make_shared<AssignStmt>("result", final_logic_tree));
+            }
 
-            /* XOR reduction */
-            std::shared_ptr<Expr> acc = std::make_shared<WireRef>("g[0]");
-            for (int k = 1; k < N; ++k)
-                acc = std::make_shared<BinExpr>(BinOp::Xor,
-                                                std::vector<std::shared_ptr<Expr>>{
-                                                    acc, std::make_shared<WireRef>("g[" + std::to_string(k) + "]")});
-            top.body.push_back(std::make_shared<AssignStmt>("result", acc));
+            uint32_t expected_result = calculateExpectedResult();
 
             /* dump Verilog file */
             std::filesystem::path fn = "gen_" + std::to_string(idx) + ".v";
             std::ofstream f(fn);
             if (!f)
                 throw std::runtime_error("open " + fn.string());
-            f << "// generated by veri::Generator\ntimescale 1ns/1ps\n\n";
+            f << "// generated by veri::Generator\n`timescale 1ns/1ps\n\n";
             f << "module const_block #(parameter VALUE=32'h0)(output [31:0] w);\n"
               << "  assign w = VALUE;\nendmodule\n\n";
             f << top.emit();
 
-            return {fn, 0};
+            return {fn, expected_result};
         }
     };
 
