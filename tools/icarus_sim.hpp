@@ -38,9 +38,9 @@ public:
             std::ofstream f(tb);
             if (!f) return {false, 0, tb};
             f << "`timescale 1ns/1ps\nmodule tb;\n"
-                "wire [31:0] res;\n"
-            << top << " dut(.result(res));\n"
-                "initial begin #1 $display(\"RES=%08h\", res); $finish; end\n"
+                "wire [31:0] out;\n"
+            << top << " dut(.out(out));\n"
+                "initial begin #1 $display(\"RES=%08h\", out); $finish; end\n"
                 "endmodule\n";
         }
 

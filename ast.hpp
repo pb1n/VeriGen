@@ -32,7 +32,7 @@ namespace veri
         virtual uint32_t eval(const std::vector<uint32_t>& values) const = 0;
     };
 
-    /* constant literal or aliased symbol */
+    // constant literal or aliased symbol
     struct Const final : Expr
     {
         uint32_t value;
@@ -42,7 +42,7 @@ namespace veri
         uint32_t eval(const std::vector<uint32_t>& /*values*/) const override { return value; }
     };
 
-    /* reference to an existing net */
+    // reference to an existing net
     struct WireRef final : Expr
     {
         std::string name;
@@ -57,7 +57,7 @@ namespace veri
         }
     };
 
-    /* binary expression ─ (op restricted later) */
+    // binary expression ─ (op restricted later)
     enum class BinOp
     {
         Add,
@@ -129,7 +129,7 @@ namespace veri
         virtual std::string emit(int) = 0;
     };
 
-    /* continuous assignment */
+    // continuous assignment
     struct AssignStmt final : Stmt
     {
         std::string lhs;
@@ -138,7 +138,7 @@ namespace veri
         std::string emit(int i) override { return ind(i) + "assign " + lhs + " = " + rhs->emit() + ";"; }
     };
 
-    /* simple module instance */
+    // simple module instance
     struct Instance final : Stmt
     {
         std::string mod, inst;
@@ -173,7 +173,7 @@ namespace veri
         }
     };
 
-    /* arbitrary text */
+    // arbitrary text
     struct CustomStmt final : Stmt
     {
         std::function<std::string(int)> fn;
@@ -181,7 +181,7 @@ namespace veri
         std::string emit(int i) override { return fn(i); }
     };
 
-    /* for-generate loop (assumes already inside generate) */
+    // for-generate loop (assumes already inside generate)
     struct GenerateFor final : Stmt
     {
         std::string var, label;
@@ -206,7 +206,7 @@ namespace veri
         }
     };
 
-    /* case-generate */
+    // case-generate
     struct GenerateCase final : Stmt
     {
         std::shared_ptr<Expr> sel;
@@ -263,7 +263,7 @@ namespace veri
             os << ");\n";
             for (auto &s : body)
                 os << s->emit(2) << "\n";
-            os << "endmodule\n";
+            os << "endmodule\n\n";
             return os.str();
         }
     };
@@ -283,6 +283,8 @@ namespace veri
         int min_start, max_start;
         int min_iter, max_iter;
         bool random_update;
+        private:
+            std::shared_ptr<Module> lastModule_;
 
         static std::shared_ptr<Stmt> constInst(const std::string &w_param, const std::string &tgt)
         {
@@ -306,7 +308,7 @@ namespace veri
                 N_per_level[level] = num_iterations;
             }
 
-            std::string update_expr, cond_expr, index;
+            std::string update_expr, cond_expr, index; // will be set based on increment/decrement logic
             bool increment = random_update ? (rng() % 2 == 0) : true;
             
             if (increment) {
@@ -396,7 +398,7 @@ namespace veri
         {
             Module top;
             top.name = topName;
-            top.ports = {"output [31:0] result"};
+            top.ports = {"output [31:0] out"};
             
             const_data.clear();
             logic_trees.clear();
@@ -433,7 +435,7 @@ namespace veri
                     return ind(i) + "wire [31:0] t0 [0:" + std::to_string(top_N - 1) + "];";
                 }));
 
-            std::reverse(logic_trees.begin(), logic_trees.end());
+            //std::reverse(logic_trees.begin(), logic_trees.end());
 
             top.body.push_back(std::make_shared<CustomStmt>(
                 [outer_loop_stmts](int i) {
@@ -455,12 +457,13 @@ namespace veri
                             std::make_shared<WireRef>("t0[" + std::to_string(k) + "]", k)
                         });
                 }
-                top.body.push_back(std::make_shared<AssignStmt>("result", final_logic_tree));
+                top.body.push_back(std::make_shared<AssignStmt>("out", final_logic_tree));
             }
 
+            lastModule_ = std::make_shared<Module>(top);
             uint32_t expected_result = calculateExpectedResult();
 
-            /* dump Verilog file */
+            // dump Verilog file
             std::filesystem::path fn = "gen_" + std::to_string(idx) + ".v";
             std::ofstream f(fn);
             if (!f)
@@ -469,9 +472,16 @@ namespace veri
             f << "module const_block #(parameter VALUE=32'h0)(output [31:0] w);\n"
               << "  assign w = VALUE;\nendmodule\n\n";
             f << top.emit();
-
+            lastModule_ = std::make_shared<Module>(top);
             return {fn, expected_result};
         }
+        std::pair<std::shared_ptr<Module>,uint32_t>
+        makeModule(const std::string& uniq, int depth = 2) {
+            auto [path, val] = make(uniq, 0, depth);
+            (void)path;
+        return { lastModule_, val };
+        }
+
     };
 
 } // namespace veri

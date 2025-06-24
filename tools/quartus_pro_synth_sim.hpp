@@ -48,7 +48,6 @@ public:
         std::string cd = "cd \"" + dir.string() + "\" && ";
         std::string qsh = std::string(quartusProRoot) +
                         "/bin/quartus_sh -t " + tcl.filename().string();
-        // *** no quartus_fit ***
         return quiet_system(cd + qsh, chat) == 0;
     }
 
@@ -64,8 +63,8 @@ public:
     bool writeTB(const std::string& top) const {
         std::ofstream f(dir/"tb.v"); if(!f) return false;
         f<<"`timescale 1ns/1ps\nmodule tb;\n"
-           "wire [31:0] res;\n"<<top<<" dut(.result(res));\n"
-           "initial begin #1 $display(\"RES=%08h\",res); $finish; end\n"
+           "wire [31:0] out;\n"<<top<<" dut(.out(out));\n"
+           "initial begin #1 $display(\"RES=%08h\",out); $finish; end\n"
            "endmodule\n";
         return true;
     }

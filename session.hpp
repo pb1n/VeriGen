@@ -1,3 +1,4 @@
+
 #pragma once
 /* session.hpp – timestamped session & iteration folder helper
     ----------------------------------------------------------------
