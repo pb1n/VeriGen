@@ -3,7 +3,9 @@
 
 ## User Guide
 ### Building
-To use the fuzzer, build it with the following command in the root directory:
+To use the fuzzer, build it with the following commands in the root directory:
+
+`git submodule update --init --recursive`
 
 `g++ -std=c++17 -O2 -Wall -Iextern/indicators/include -o VeriGen main.cpp`
 
