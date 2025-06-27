@@ -5,7 +5,7 @@
 ### Building
 To use the fuzzer, build it with the following command in the root directory:
 
-`g++ -std=c++17 -O2 -Wall -Iextern/indicators/include -o fuzz_run main.cpp`
+`g++ -std=c++17 -O2 -Wall -Iextern/indicators/include -o VeriGen main.cpp`
 
 Dependencies:
 - A C++17 toolchain (e.g. GCC or Clang)
@@ -15,7 +15,7 @@ Dependencies:
  
 ### Basic Invocation
 
-`./fuzz_run [options]`
+`./VeriGen [options]`
 
 By default, it:
 - Generates a single “loop-only” design (--hier off).
