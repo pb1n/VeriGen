@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./ast_example.exe:*)",
+      "Bash(mkdir:*)"
+    ]
+  }
+}
