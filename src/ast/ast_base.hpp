@@ -19,7 +19,10 @@ public:
     // Accept visitor for traversal
     virtual void accept(Visitor& visitor) = 0;
 
+    // TODO: REMOVE emit() - This violates separation of concerns!
     // Emit to string representation (Verilog code)
+    // This should be handled by EmitVisitor, not baked into AST nodes.
+    // Keep for now during transition, remove in future refactor.
     virtual std::string emit() const = 0;
 };
 

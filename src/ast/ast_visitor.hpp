@@ -139,11 +139,108 @@ public:
     void visit(AssignStmt& node) override;
     void visit(BlockStmt& node) override;
     void visit(IfStmt& node) override;
+    void visit(CaseStmt& node) override;
+    void visit(ForStmt& node) override;
+    void visit(WhileStmt& node) override;
     void visit(AlwaysStmt& node) override;
     void visit(InitialStmt& node) override;
+    void visit(GenerateStmt& node) override;
 
     // Module
     void visit(ModuleDefn& node) override;
+};
+
+// Visitor that emits Verilog code
+class EmitVisitor : public BaseVisitor {
+public:
+    EmitVisitor() : indent_level_(0), emit_generate_wrapper_(true) {}
+
+    std::string getResult() const { return result_; }
+
+    // Expression visitors
+    void visit(LiteralExpr& node) override;
+    void visit(VarExpr& node) override;
+    void visit(BinaryExpr& node) override;
+    void visit(UnaryExpr& node) override;
+    void visit(ConditionalExpr& node) override;
+    void visit(BitSelectExpr& node) override;
+    void visit(RangeSelectExpr& node) override;
+    void visit(ConcatExpr& node) override;
+
+    // Statement visitors
+    void visit(AssignStmt& node) override;
+    void visit(BlockStmt& node) override;
+    void visit(IfStmt& node) override;
+    void visit(CaseStmt& node) override;
+    void visit(ForStmt& node) override;
+    void visit(WhileStmt& node) override;
+    void visit(AlwaysStmt& node) override;
+    void visit(InitialStmt& node) override;
+    void visit(GenerateStmt& node) override;
+
+    // Declaration visitors
+    void visit(VarDecl& node) override;
+    void visit(PortDecl& node) override;
+    void visit(ParamDecl& node) override;
+    void visit(GenvarDecl& node) override;
+
+    // Module visitor
+    void visit(ModuleDefn& node) override;
+
+private:
+    std::string result_;
+    int indent_level_;
+    bool emit_generate_wrapper_;  // Whether to emit generate/endgenerate wrapper
+
+    void indent() { 
+        for (int i = 0; i < indent_level_; ++i) {
+            result_ += "  ";
+        }
+    }
+
+    std::string visitExpr(Expr* expr) {
+        EmitVisitor v;
+        v.indent_level_ = indent_level_;
+        v.emit_generate_wrapper_ = emit_generate_wrapper_;
+        expr->accept(v);
+        return v.result_;
+    }
+
+    std::string visitStmt(Stmt* stmt) {
+        EmitVisitor v;
+        v.indent_level_ = indent_level_;
+        v.emit_generate_wrapper_ = emit_generate_wrapper_;
+        stmt->accept(v);
+        return v.result_;
+    }
+
+    // Helper to indent a multi-line string
+    static std::string indentString(const std::string& str, const std::string& prefix) {
+        if (str.empty()) return str;
+
+        std::string result;
+        size_t start = 0;
+        size_t end = str.find('\n');
+
+        while (end != std::string::npos) {
+            if (!result.empty()) result += "\n";
+            result += prefix + str.substr(start, end - start);
+            start = end + 1;
+            end = str.find('\n', start);
+        }
+
+        // Handle the last line (or only line if no newlines)
+        if (!result.empty()) result += "\n";
+        result += prefix + str.substr(start);
+
+        return result;
+    }
+
+    // Helper methods (defined in .cpp since they need complete type information)
+    std::string visitStmtBody(Stmt* stmt);
+    std::string visitParamWithoutSemicolon(ParamDecl* param);
+    std::string visitPort(PortDecl* port);
+    std::string visitDecl(Decl* decl);
 };
 
 } // namespace ast

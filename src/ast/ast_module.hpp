@@ -6,6 +6,7 @@
 #include "ast_expr.hpp"
 #include <string>
 #include <vector>
+#include <sstream>
 
 namespace ast {
 
@@ -99,48 +100,138 @@ public:
 
     // For for generate
     GenerateStmt(Ptr<GenvarDecl> genvar, Ptr<Expr> init, Ptr<Expr> cond,
-                 Ptr<Stmt> update, Ptr<Stmt> body)
+                 Ptr<Expr> update, Ptr<Stmt> body)
         : kind_(Kind::For),
           cond_(std::move(cond)),
           then_block_(std::move(body)),
           else_block_(nullptr),
           genvar_(std::move(genvar)),
           init_expr_(std::move(init)),
-          update_stmt_(std::move(update)) {}
+          update_expr_(std::move(update)) {}
+          
+    // For case generate
+    struct CaseItem {
+        std::vector<Ptr<Expr>> values;
+        Ptr<Stmt> body;
+    };
+
+    GenerateStmt(Ptr<Expr> case_expr, std::vector<CaseItem> items, Ptr<Stmt> default_stmt = nullptr)
+        : kind_(Kind::Case),
+          // Initialize unused members in declaration order
+          cond_(nullptr), then_block_(nullptr), else_block_(nullptr),
+          genvar_(nullptr), init_expr_(nullptr), update_expr_(nullptr),
+          case_expr_(std::move(case_expr)),
+          case_items_(std::move(items)),
+          case_default_(std::move(default_stmt)) {}
 
     std::string emit() const override {
-        std::string result = "generate\n";
+        return "generate\n" + indent(emitBody(), "  ") + "\nendgenerate";
+    }
+
+    // Emit just the generate construct content without wrapper (unindented)
+    std::string emitBody() const {
+        std::string result;
 
         switch (kind_) {
             case Kind::If:
-                result += "  if (" + cond_->emit() + ") begin\n";
-                result += "    " + then_block_->emit() + "\n";
-                result += "  end";
+                result += "if (" + cond_->emit() + ") begin\n";
+                result += indent(emitStmtBody(then_block_.get()), "  ") + "\n";
+                result += "end";
                 if (else_block_) {
                     result += " else begin\n";
-                    result += "    " + else_block_->emit() + "\n";
-                    result += "  end";
+                    result += indent(emitStmtBody(else_block_.get()), "  ") + "\n";
+                    result += "end";
                 }
                 break;
 
             case Kind::For:
-                result += "  for (" + genvar_->getName() + " = " + init_expr_->emit() + "; ";
+                result += "for (" + genvar_->getName() + " = " + init_expr_->emit() + "; ";
                 result += cond_->emit() + "; ";
-                result += genvar_->getName() + " = " + update_stmt_->emit() + ") begin\n";
-                result += "    " + then_block_->emit() + "\n";
-                result += "  end";
+                result += genvar_->getName() + " = " + update_expr_->emit() + ") begin\n";
+                result += indent(emitStmtBody(then_block_.get()), "  ") + "\n";
+                result += "end";
                 break;
 
             case Kind::Case:
-                // Not implemented yet
+                // 1. Emit the switch expression
+                result += "case (" + case_expr_->emit() + ")\n";
+
+                // 2. Emit each case item
+                for (const auto& item : case_items_) {
+                    result += "  ";
+                    // Handle comma-separated values: "val1, val2"
+                    for (size_t i = 0; i < item.values.size(); ++i) {
+                        result += item.values[i]->emit();
+                        if (i < item.values.size() - 1) {
+                            result += ", ";
+                        }
+                    }
+                    result += ": begin\n";
+                    if (item.body) {
+                        result += "    " + item.body->emit() + "\n";
+                    }
+                    result += "  end\n";
+                }
+
+                // 3. Emit default block if it exists
+                if (case_default_) {
+                    result += "  default: begin\n";
+                    result += "    " + case_default_->emit() + "\n";
+                    result += "  end\n";
+                }
+
+                result += "endcase\n";
                 break;
         }
 
-        result += "\nendgenerate";
         return result;
     }
 
+private:
+    // Helper to indent a multi-line string
+    static std::string indent(const std::string& str, const std::string& prefix) {
+        if (str.empty()) return str;
+
+        std::string result;
+        size_t start = 0;
+        size_t end = str.find('\n');
+
+        while (end != std::string::npos) {
+            if (!result.empty()) result += "\n";
+            result += prefix + str.substr(start, end - start);
+            start = end + 1;
+            end = str.find('\n', start);
+        }
+
+        // Handle the last line (or only line if no newlines)
+        if (!result.empty()) result += "\n";
+        result += prefix + str.substr(start);
+
+        return result;
+    }
+
+    // Helper to emit statement body - if it's a GenerateStmt, emit without wrapper
+    static std::string emitStmtBody(const Stmt* stmt) {
+        if (auto* gen = dynamic_cast<const GenerateStmt*>(stmt)) {
+            return gen->emitBody();
+        }
+        return stmt->emit();
+    }
+
+public:
+
     Kind getKind() const { return kind_; }
+
+    // Accessors for visitor pattern
+    const Expr* getCond() const { return cond_.get(); }
+    const Stmt* getThenBlock() const { return then_block_.get(); }
+    const Stmt* getElseBlock() const { return else_block_.get(); }
+    const GenvarDecl* getGenvar() const { return genvar_.get(); }
+    const Expr* getInitExpr() const { return init_expr_.get(); }
+    const Expr* getUpdateExpr() const { return update_expr_.get(); }
+    const Expr* getCaseExpr() const { return case_expr_.get(); }
+    const std::vector<CaseItem>& getCaseItems() const { return case_items_; }
+    const Stmt* getCaseDefault() const { return case_default_.get(); }
 
 private:
     Kind kind_;
@@ -153,7 +244,12 @@ private:
     // For for generate
     Ptr<GenvarDecl> genvar_;
     Ptr<Expr> init_expr_;
-    Ptr<Stmt> update_stmt_;
+    Ptr<Expr> update_expr_;
+    
+    // For case generate
+    Ptr<Expr> case_expr_;
+    std::vector<CaseItem> case_items_;
+    Ptr<Stmt> case_default_;
 };
 
 // Module definition

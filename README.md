@@ -18,7 +18,7 @@ reVeriGen provides a comprehensive AST framework for programmatically constructi
 ## Project Structure
 
 ```
-reVeriGen/
+VeriGen/
 ├── src/
 │   └── ast/
 │       ├── ast_base.hpp       # Base classes for all AST nodes

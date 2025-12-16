@@ -2,6 +2,8 @@
 build/
 cmake-build-*/
 out/
+legacy/
+.claude/
 
 # CMake
 CMakeCache.txt
@@ -64,3 +66,10 @@ test_results/
 *.gcda
 *.gcno
 coverage/
+
+# Generated Verilog files in root
+/*.v
+/*.vcd
+
+# Generated files directory
+generatedFiles/

@@ -292,4 +292,143 @@ private:
     Ptr<Stmt> body_;
 };
 
+// Generate for-loop (for hierarchical instantiation)
+class GenerateForStmt : public Stmt {
+public:
+    GenerateForStmt(std::string genvar,
+                   std::string label,
+                   Ptr<Expr> init_value,
+                   Ptr<Expr> condition,
+                   Ptr<Expr> increment,
+                   std::vector<Ptr<Stmt>> body)
+        : genvar_(std::move(genvar)),
+          label_(std::move(label)),
+          init_value_(std::move(init_value)),
+          condition_(std::move(condition)),
+          increment_(std::move(increment)),
+          body_(std::move(body)) {}
+
+    std::string emit() const override {
+        std::string result = "genvar " + genvar_ + ";\n";
+        result += "for (" + genvar_ + " = " + init_value_->emit() + "; ";
+        result += condition_->emit() + "; ";
+        result += genvar_ + " = " + increment_->emit() + ") begin";
+
+        if (!label_.empty()) {
+            result += " : " + label_;
+        }
+        result += "\n";
+
+        for (const auto& stmt : body_) {
+            result += "  " + stmt->emit() + "\n";
+        }
+
+        result += "end";
+        return result;
+    }
+
+    const std::string& getGenvar() const { return genvar_; }
+    const std::string& getLabel() const { return label_; }
+    const Expr* getInitValue() const { return init_value_.get(); }
+    const Expr* getCondition() const { return condition_.get(); }
+    const Expr* getIncrement() const { return increment_.get(); }
+    const std::vector<Ptr<Stmt>>& getBody() const { return body_; }
+
+private:
+    std::string genvar_;
+    std::string label_;
+    Ptr<Expr> init_value_;
+    Ptr<Expr> condition_;
+    Ptr<Expr> increment_;
+    std::vector<Ptr<Stmt>> body_;
+};
+
+// Generate case statement (for conditional generation)
+class GenerateCaseStmt : public Stmt {
+public:
+    struct CaseItem {
+        Ptr<Expr> condition;
+        std::vector<Ptr<Stmt>> body;
+    };
+
+    GenerateCaseStmt(Ptr<Expr> selector,
+                    std::vector<CaseItem> items,
+                    std::vector<Ptr<Stmt>> default_body = {})
+        : selector_(std::move(selector)),
+          items_(std::move(items)),
+          default_body_(std::move(default_body)) {}
+
+    std::string emit() const override {
+        std::string result = "case (" + selector_->emit() + ")\n";
+
+        for (const auto& item : items_) {
+            result += "  " + item.condition->emit() + ": begin\n";
+            for (const auto& stmt : item.body) {
+                result += "    " + stmt->emit() + "\n";
+            }
+            result += "  end\n";
+        }
+
+        if (!default_body_.empty()) {
+            result += "  default: begin\n";
+            for (const auto& stmt : default_body_) {
+                result += "    " + stmt->emit() + "\n";
+            }
+            result += "  end\n";
+        }
+
+        result += "endcase";
+        return result;
+    }
+
+    const Expr* getSelector() const { return selector_.get(); }
+    const std::vector<CaseItem>& getItems() const { return items_; }
+    const std::vector<Ptr<Stmt>>& getDefaultBody() const { return default_body_; }
+
+private:
+    Ptr<Expr> selector_;
+    std::vector<CaseItem> items_;
+    std::vector<Ptr<Stmt>> default_body_;
+};
+
+// Generate if statement (for conditional generation)
+class GenerateIfStmt : public Stmt {
+public:
+    GenerateIfStmt(Ptr<Expr> condition,
+                  std::vector<Ptr<Stmt>> then_body,
+                  std::vector<Ptr<Stmt>> else_body = {})
+        : condition_(std::move(condition)),
+          then_body_(std::move(then_body)),
+          else_body_(std::move(else_body)) {}
+
+    std::string emit() const override {
+        std::string result = "if (" + condition_->emit() + ") begin\n";
+
+        for (const auto& stmt : then_body_) {
+            result += "  " + stmt->emit() + "\n";
+        }
+
+        result += "end";
+
+        if (!else_body_.empty()) {
+            result += " else begin\n";
+            for (const auto& stmt : else_body_) {
+                result += "  " + stmt->emit() + "\n";
+            }
+            result += "end";
+        }
+
+        return result;
+    }
+
+    const Expr* getCondition() const { return condition_.get(); }
+    const std::vector<Ptr<Stmt>>& getThenBody() const { return then_body_; }
+    const std::vector<Ptr<Stmt>>& getElseBody() const { return else_body_; }
+
+private:
+    Ptr<Expr> condition_;
+    std::vector<Ptr<Stmt>> then_body_;
+    std::vector<Ptr<Stmt>> else_body_;
+};
+
 } // namespace ast

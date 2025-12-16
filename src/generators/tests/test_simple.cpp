@@ -1,4 +1,4 @@
-#include "counter_gen.hpp"
+#include "../counter_gen.hpp"
 #include <iostream>
 
 int main() {
