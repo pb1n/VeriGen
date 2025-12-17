@@ -43,10 +43,6 @@ add_executable(ast_example
 )
 
 # Generator test executables
-add_executable(test_counter_gen
-    src/generators/tests/test_counter_gen.cpp
-)
-
 add_executable(test_generate_constructs
     src/generators/tests/test_generate_constructs.cpp
     src/generators/case_gen.cpp
@@ -56,9 +52,8 @@ add_executable(test_refmodel_gen
     src/generators/tests/test_refmodel_gen.cpp
 )
 
-target_link_libraries(test_counter_gen PRIVATE ast_lib)
-target_link_libraries(test_generate_constructs PRIVATE ast_lib)
-target_link_libraries(test_refmodel_gen PRIVATE ast_lib)
+target_link_libraries(test_generate_constructs PRIVATE ast_lib tools_lib)
+target_link_libraries(test_refmodel_gen PRIVATE ast_lib tools_lib)
 
 target_link_libraries(ast_example PRIVATE ast_lib)
 

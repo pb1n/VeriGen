@@ -100,34 +100,36 @@ private:
     std::string tick_body_;                   // Body of tick() method
     std::string class_name_;                  // Generated class name
 
+    // FIX 1: Track non-blocking assignments
+    std::vector<std::string> nonblocking_vars_;  // Variables with non-blocking assignments
+
+    // FIX 2: Track signals used in edge detection
+    std::vector<std::string> prev_signals_;   // Signals needing prev_ copies
+
     /**
      * Helper: Translate expression recursively to C++ syntax
-     *
-     * TODO: Implement expression translation
-     * - Call visit() on expression
-     * - Return result_ (visitor sets this)
-     *
-     * @param expr Expression to translate
-     * @return C++ expression string
      */
     std::string translateExpr(Expr* expr);
 
     /**
      * Helper: Generate indentation string
      */
-    std::string indent() const {
-        return std::string(indent_level_ * 4, ' ');
-    }
+    std::string indent() const;
 
     /**
-     * Helper: Translate Verilog type to C++ type
-     *
-     * Examples:
-     *   wire [7:0] → uint32_t (or uint8_t if you want to be precise)
-     *   wire [31:0] → uint32_t
-     *   wire → bool
-     *
-     * TODO: Implement type translation
+     * Helper: Choose appropriate C++ type based on bit width
+     * FIX 4: Proper type selection (uint8_t, uint16_t, uint32_t, uint64_t)
+     */
+    std::string chooseCppType(int width);
+
+    /**
+     * Helper: Register a signal for edge detection (adds prev_ variable)
+     * FIX 2: Centralized tracking of prev_ signals
+     */
+    void registerPrevSignal(const std::string& signal);
+
+    /**
+     * Helper: Translate Verilog type to C++ type (DEPRECATED)
      */
     std::string translateType(const std::string& verilog_type);
 };
