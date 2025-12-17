@@ -1,4 +1,4 @@
-# reVeriGen
+# VeriGen: reworked
 
 A C++ library for representing and generating Verilog/SystemVerilog code through an Abstract Syntax Tree (AST).
 
