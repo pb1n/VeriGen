@@ -4,7 +4,7 @@ A C++ library for representing and generating Verilog/SystemVerilog code through
 
 ## Overview
 
-reVeriGen provides a comprehensive AST framework for programmatically constructing Verilog modules and expressions. It supports code emission (generating Verilog text) and expression evaluation for verification and testing.
+VeriGen: reworked provides a comprehensive AST framework for programmatically constructing Verilog modules and expressions. It supports code emission (generating Verilog text) and expression evaluation for verification and testing.
 
 ## Features
 
