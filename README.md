@@ -218,19 +218,6 @@ auto result = expr->eval(values);
 4. **Minimal Dependencies**: Uses only C++17 standard library
 5. **Header Hygiene**: `#pragma once` and minimal includes
 
-## Future Work
-
-- [ ] Unit test framework
-- [ ] More comprehensive error messages
-- [ ] Support for SystemVerilog interfaces and classes
-- [ ] Advanced type checking
-- [ ] Parser to build AST from Verilog source
-- [ ] Optimization passes
-
-## Contributing
-
-This is a university project. Contributions should follow the guidelines in [.github/copilot-instructions.md](.github/copilot-instructions.md).
-
 ## License
 
 TBD
